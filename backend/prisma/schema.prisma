@@ -1,0 +1,324 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+  SUPERADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum QuestionType {
+  MCQ
+  TRUE_FALSE
+  FILL_IN_BLANK
+  DESCRIPTIVE
+  MATCHING
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  COMPLETED
+  TIMED_OUT
+}
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  password        String?
+  firstName       String
+  lastName        String
+  phone           String?
+  profilePicture  String?
+  role            Role     @default(USER)
+  isEmailVerified Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  orders             Order[]
+  examAttempts       ExamAttempt[]
+  notifications      Notification[]
+  downloadIds        DownloadId[]
+  adminPermission    AdminPermission?
+  leaderboardEntries LeaderboardEntry[]
+
+  @@map("users")
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  email     String
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@map("otp_codes")
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  slug        String   @unique
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id            String   @id @default(uuid())
+  title         String   @unique  // ✅ Add this
+  description   String
+  price         Decimal  @db.Decimal(10, 2)
+  fileUrl       String
+  fileName      String
+  fileSize      Int
+  previewUrl    String?
+  thumbnail     String?
+  isActive      Boolean  @default(true)
+  rating        Decimal? @db.Decimal(3, 2)
+  downloadCount Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  details ProductDetails?
+  categoryId  String
+  category    Category     @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+  exams       Exam[]
+  downloadIds DownloadId[]
+
+  @@map("products")
+}
+
+model ProductDetails {
+  id          String   @id @default(uuid())
+  productId   String   @unique
+  language    String?
+  pages       Int?
+  format      String? // e.g. "PDF", "EPUB"
+  version     String?
+  publisher   String?
+  publishedAt DateTime?
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_details")
+}
+
+model Order {
+  id            String      @id @default(uuid())
+  userId        String
+  totalAmount   Decimal     @db.Decimal(10, 2)
+  status        OrderStatus @default(PENDING)
+  paymentId     String?
+  paymentMethod String?
+  invoiceUrl    String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Relations
+  user       User        @relation(fields: [userId], references: [id])
+  orderItems OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  productId String
+  quantity  Int     @default(1)
+  price     Decimal @db.Decimal(10, 2)
+
+  // Relations
+  order   Order   @relation(fields: [orderId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+model DownloadId {
+  id         String    @id @default(uuid())
+  downloadId String    @unique
+  productId  String
+  userId     String
+  isUsed     Boolean   @default(false)
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@map("download_ids")
+}
+
+model PaymentEvent {
+  id         String   @id @default(uuid())
+  paymentId  String   // Stripe/Razorpay payment intent ID
+  eventType  String   // e.g. 'payment_intent.succeeded'
+  payload    Json     // Full webhook body
+  createdAt  DateTime @default(now())
+
+  @@map("payment_events")
+}
+
+model Exam {
+  id                 String     @id @default(uuid())
+  title              String
+  description        String?
+  productId          String?
+  duration           Int // in minutes
+  totalMarks         Int
+  passingMarks       Int
+  status             ExamStatus @default(DRAFT)
+  startTime          DateTime?
+  endTime            DateTime?
+  isActive           Boolean    @default(true)
+  contentId          String?
+  requiresDownloadId Boolean    @default(true)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  // Relations
+  product            Product?           @relation(fields: [productId], references: [id])
+  questions          Question[]
+  examAttempts       ExamAttempt[]
+  leaderboardEntries LeaderboardEntry[]
+
+  @@map("exams")
+}
+
+model Question {
+  id            String       @id @default(uuid())
+  examId        String
+  type          QuestionType
+  question      String
+  options       Json? // For MCQ, TF, Matching
+  correctAnswer String
+  explanation   String?
+  marks         Int
+  order         Int
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Relations
+  exam    Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  answers Answer[]
+
+  @@map("questions")
+}
+
+model ExamAttempt {
+  id            String    @id @default(uuid())
+  userId        String
+  examId        String
+  startTime     DateTime  @default(now())
+  endTime       DateTime?
+  totalMarks    Int?
+  marksObtained Int?
+  percentage    Decimal?  @db.Decimal(5, 2)
+  status        AttemptStatus  @default(IN_PROGRESS)
+  timeSpent     Int? // in milliseconds
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  user    User     @relation(fields: [userId], references: [id])
+  exam    Exam     @relation(fields: [examId], references: [id])
+  answers Answer[]
+
+  @@map("exam_attempts")
+}
+
+model Answer {
+  id           String    @id @default(uuid())
+  attemptId    String
+  questionId   String
+  userAnswer   String
+  isCorrect    Boolean?
+  marksAwarded Int?
+  submittedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  attempt  ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([attemptId, questionId])
+  @@map("answers")
+}
+
+model AdminPermission {
+  id                  String   @id @default(uuid())
+  adminId             String   @unique
+  canManageProducts   Boolean  @default(false)
+  canManageCategories Boolean  @default(false)
+  canManageOrders     Boolean  @default(false)
+  canManageExams      Boolean  @default(false)
+  canViewAnalytics    Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user User @relation(fields: [adminId], references: [id])
+
+  @@map("admin_permissions")
+}
+
+model LeaderboardEntry {
+  id        String   @id @default(uuid())
+  userId    String
+  examId    String
+  score     Int
+  rank      Int
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  exam Exam @relation(fields: [examId], references: [id])
+
+  @@unique([userId, examId])
+  @@map("leaderboard_entries")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String // EMAIL, WHATSAPP, INAPP
+  message   String
+  status    String   @default("PENDING") // SENT, FAILED
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
